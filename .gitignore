@@ -1,0 +1,15 @@
+staticfiles/
+mediafiles/
+*.log
+
+# local env files
+.env
+.env.example
+
+# virtual environment
+venv/
+# pycache
+__pycache__/
+*.pyc       
+*.pyo
+*.pyd

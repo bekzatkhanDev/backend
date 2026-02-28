@@ -1,0 +1,8 @@
+Django>=4.2,<5.0
+djangorestframework>=3.14
+psycopg2-binary>=2.9
+django-cors-headers>=4.0
+djangorestframework-simplejwt>=5.0
+djangorestframework-gis>=0.18
+django-leaflet
+requests>=2.28
