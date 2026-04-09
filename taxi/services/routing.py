@@ -1,4 +1,4 @@
-# Маршрут и дистанция через Google Directions или Haversine
+# Маршрут и дистанция через OSRM (OpenStreetMap) или Haversine
 import logging
 import math
 from typing import Dict, Any, Optional
@@ -8,25 +8,23 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
-class GoogleDirectionsService:
-    BASE_URL = "https://maps.googleapis.com/maps/api/directions/json"
+class OSRMRoutingService:
+    """Routing service using OSRM (Open Source Routing Machine) with OpenStreetMap data."""
+    BASE_URL = "https://router.project-osrm.org/route/v1/driving"
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or getattr(settings, 'GOOGLE_API_KEY', None)
-        if not self.api_key:
-            logger.warning("Google API key not configured")
+        # OSRM is free and doesn't require an API key
+        self.api_key = None
     
     def get_route(self, start_lng: float, start_lat: float,
                   end_lng: float, end_lat: float) -> Dict[str, Any]:
-        if not self.api_key:
-            return self._calculate_haversine(start_lng, start_lat, end_lng, end_lat)
-
         try:
-            origin = f"{start_lat},{start_lng}"
-            destination = f"{end_lat},{end_lng}"
-            url = f"{self.BASE_URL}?origin={origin}&destination={destination}&mode=driving&key={self.api_key}"
+            # OSRM format: lng,lat
+            origin = f"{start_lng},{start_lat}"
+            destination = f"{end_lng},{end_lat}"
+            url = f"{self.BASE_URL}/{origin};{destination}?overview=false"
             
-            logger.info(f"Calling Google Directions API")
+            logger.info(f"Calling OSRM Routing API")
             
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -35,43 +33,33 @@ class GoogleDirectionsService:
             return self._parse_route_response(data)
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Google Directions API request failed: {str(e)}")
+            logger.error(f"OSRM API request failed: {str(e)}")
             return self._calculate_haversine(start_lng, start_lat, end_lng, end_lat)
         except (KeyError, ValueError) as e:
-            logger.error(f"Failed to parse Google Directions response: {str(e)}")
+            logger.error(f"Failed to parse OSRM response: {str(e)}")
             return self._calculate_haversine(start_lng, start_lat, end_lng, end_lat)
 
     def _parse_route_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            status = data.get('status')
-            if status != 'OK':
-                raise ValueError(f"Google API returned status: {status}")
+            code = data.get('code')
+            if code != 'Ok':
+                raise ValueError(f"OSRM API returned code: {code}")
             
             routes = data.get('routes', [])
             if not routes:
                 raise ValueError("No routes found in response")
             
-            legs = routes[0].get('legs', [])
-            if not legs:
-                raise ValueError("No legs found in route")
+            route = routes[0]
             
-            leg = legs[0]
-            
-            distance = leg.get('distance', {})
-            distance_km = distance.get('value', 0) / 1000
-            
-            duration = leg.get('duration', {})
-            duration_min = duration.get('value', 0) / 60
-            
-            geometry = None
-            overview_polyline = routes[0].get('overview_polyline', {})
-            if overview_polyline:
-                geometry = overview_polyline.get('points')
+            # OSRM returns distance in meters, duration in seconds
+            distance_km = route.get('distance', 0) / 1000
+            duration_min = route.get('duration', 0) / 60
             
             return {
                 'distance_km': round(distance_km, 2),
                 'duration_min': round(duration_min, 2),
-                'geometry': geometry,
+                'geometry': None,  # OSRM geometry is encoded polyline if overview=full
+                'is_estimate': False,
             }
             
         except (KeyError, IndexError, TypeError) as e:
@@ -80,7 +68,7 @@ class GoogleDirectionsService:
     
     def _calculate_haversine(self, start_lng: float, start_lat: float,
                             end_lng: float, end_lat: float) -> Dict[str, Any]:
-        """Дистанция по формуле Haversine, если нет ключа Google."""
+        """Дистанция по формуле Haversine, если API недоступен."""
         R = 6371.0
         lat1 = math.radians(start_lat)
         lat2 = math.radians(end_lat)
@@ -102,9 +90,9 @@ class GoogleDirectionsService:
         }
 
     def is_configured(self) -> bool:
-        return bool(self.api_key)
+        # OSRM is always available (free public instance)
+        return True
 
 
-def get_routing_service() -> GoogleDirectionsService:
-    api_key = getattr(settings, 'GOOGLE_API_KEY', None)
-    return GoogleDirectionsService(api_key=api_key)
+def get_routing_service() -> OSRMRoutingService:
+    return OSRMRoutingService()

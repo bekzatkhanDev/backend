@@ -1,7 +1,8 @@
 # Services package
-from .routing import GoogleDirectionsService, get_routing_service
+from .routing import OSRMRoutingService, get_routing_service
 
 # Alias for backward compatibility
-GeoapifyRoutingService = GoogleDirectionsService
+GoogleDirectionsService = OSRMRoutingService
+GeoapifyRoutingService = OSRMRoutingService
 
-__all__ = ['GoogleDirectionsService', 'GeoapifyRoutingService', 'get_routing_service']
+__all__ = ['OSRMRoutingService', 'GoogleDirectionsService', 'GeoapifyRoutingService', 'get_routing_service']
