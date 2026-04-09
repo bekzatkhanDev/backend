@@ -1,15 +1,1 @@
-staticfiles/
-mediafiles/
-*.log
-
-# local env files
-.env
-.env.example
-
-# virtual environment
-venv/
-# pycache
-__pycache__/
-*.pyc       
-*.pyo
-*.pyd
+Nothing should be ignored in this case, as the changes only include source code files (.py) and there are no build artifacts, dependencies, or temporary files present.

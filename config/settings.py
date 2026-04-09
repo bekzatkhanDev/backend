@@ -146,7 +146,8 @@ MEDIA_ROOT = BASE_DIR / 'media'
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
-GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+# OSRM (OpenStreetMap) routing - free, no API key required
+# If you need higher rate limits, consider self-hosting OSRM or using a paid provider
 
 # Driver location freshness (seconds). Used for nearby + auto-assign + driver accept.
 DRIVER_LOCATION_MAX_AGE_SECONDS = int(os.getenv('DRIVER_LOCATION_MAX_AGE_SECONDS', '60'))
