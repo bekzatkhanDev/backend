@@ -773,62 +773,72 @@ class TripCreateView(generics.CreateAPIView):
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     def _assign_nearest_driver(self, trip):
-        """Назначаем ближайшего свободного водителя на поездку."""
+        """Назначаем ближайшего свободного водителя на поездку.
+
+        Two-pass search:
+        1. Cars with a fresh location update (within DRIVER_LOCATION_MAX_AGE_SECONDS).
+        2. Fallback: any active car with a location, ignoring freshness.
+           This keeps the app working in dev/staging where seeded driver
+           locations are never refreshed.
+        """
         from django.contrib.gis.db.models.functions import Distance
 
-        busy_driver_ids = Trip.objects.filter(
-            status__in=['requested', 'accepted', 'on_route']
-        ).exclude(driver__isnull=True).values_list('driver_id', flat=True)
-        busy_driver_ids = set(busy_driver_ids)
+        busy_driver_ids = set(
+            Trip.objects.filter(
+                status__in=['requested', 'accepted', 'on_route']
+            ).exclude(driver__isnull=True).values_list('driver_id', flat=True)
+        )
 
         tariff = trip.tariff
-        car_type_ids = CarTypeTariff.objects.filter(
-            tariff=tariff
-        ).values_list('car_type_id', flat=True)
+        car_type_ids = list(
+            CarTypeTariff.objects.filter(tariff=tariff).values_list('car_type_id', flat=True)
+        )
 
         point = Point(trip.start_lng, trip.start_lat, srid=4326)
 
-        cutoff = timezone.now() - timezone.timedelta(
-            seconds=getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
-        )
-
-        available_cars = Car.objects.filter(
+        base_qs = Car.objects.filter(
             is_active=True,
             carlocation__isnull=False,
-            carlocation__updated_at__gte=cutoff,
-            car_type_id__in=car_type_ids
+            car_type_id__in=car_type_ids,
         ).exclude(
             driver_id__in=busy_driver_ids
         ).select_related('brand', 'car_type', 'driver')
 
-        if not available_cars.exists():
+        # Pass 1 — prefer cars with a fresh location
+        cutoff = timezone.now() - timezone.timedelta(
+            seconds=getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+        )
+        fresh_qs = base_qs.filter(carlocation__updated_at__gte=cutoff)
+        candidate_qs = fresh_qs if fresh_qs.exists() else base_qs  # Pass 2 fallback
+
+        if not candidate_qs.exists():
             logger.info(f"Trip {trip.id}: No available drivers found")
             return trip
 
-        available_cars = available_cars.annotate(
+        nearest_car = candidate_qs.annotate(
             distance_m=Distance('carlocation__location', point)
-        ).order_by('distance_m')
-
-        nearest_car = available_cars.first()
+        ).order_by('distance_m').first()
 
         if nearest_car:
             trip.driver = nearest_car.driver
             trip.car = nearest_car
             trip.status = 'accepted'
             trip.save(update_fields=['driver', 'car', 'status'])
-            logger.info(f"Trip {trip.id}: Assigned to driver {trip.driver.phone} (car: {nearest_car.plate_number})")
+            logger.info(
+                f"Trip {trip.id}: Assigned to driver {trip.driver.phone} "
+                f"(car: {nearest_car.plate_number})"
+            )
         else:
             logger.info(f"Trip {trip.id}: No available cars after filtering")
 
         return trip
 
 
-class ActiveTripView(generics.RetrieveAPIView):
-    serializer_class = TripDetailSerializer
+class ActiveTripView(views.APIView):
     permission_classes = [IsAuthenticatedAndActive]
 
-    def get_object(self):
-        user = self.request.user
+    def get(self, request):
+        user = request.user
         trip = Trip.objects.filter(
             customer=user,
             status__in=['requested', 'accepted', 'on_route']
@@ -839,9 +849,9 @@ class ActiveTripView(generics.RetrieveAPIView):
                 status__in=['accepted', 'on_route']
             ).first()
         if not trip:
-            from rest_framework.exceptions import NotFound
-            raise NotFound("Нет активной поездки.")
-        return trip
+            return Response(None, status=status.HTTP_200_OK)
+        serializer = TripDetailSerializer(trip, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class TripDetailView(generics.RetrieveUpdateAPIView):
