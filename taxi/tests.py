@@ -1,5 +1,6 @@
 # backend/taxi/tests.py
 from django.contrib.gis.geos import Point
+from django.utils import timezone
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
@@ -151,12 +152,12 @@ class TripTests(BaseTestCase):
 
     def test_driver_can_accept_trip(self):
         trip = create_trip(self.customer, status='requested')
+        point = Point(76.8897, 43.2389, srid=4326)
+        CarLocation.objects.create(car=self.car, lat=43.2389, lng=76.8897, location=point)
         self.authenticate_as(self.driver_user)
         url = reverse('taxi_api:trip-detail', kwargs={'id': trip.id})
         data = {'status': 'accepted'}
         response = self.client.patch(url, data)
-        # ⚠️ This will fail with 403 until you fix the permission logic
-        # But keep test as-is to catch the bug
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         trip.refresh_from_db()
         self.assertEqual(trip.status, 'accepted')
@@ -198,6 +199,87 @@ class LocationTests(BaseTestCase):
         response = self.client.get(url, params)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
+
+
+class DriverStatusTests(BaseTestCase):
+    def test_driver_online_status_offline(self):
+        # Make driver offline by deactivating the only car
+        self.car.is_active = False
+        self.car.save(update_fields=['is_active'])
+
+        self.authenticate_as(self.driver_user)
+        url = reverse('taxi_api:driver-online-status')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['online'], False)
+        self.assertIsNone(response.data['active_car'])
+        # No active car -> no location context
+        self.assertTrue(response.data['location_is_stale'])
+
+    def test_driver_online_status_online_fresh_location(self):
+        point = Point(76.8897, 43.2389, srid=4326)
+        CarLocation.objects.create(car=self.car, lat=43.2389, lng=76.8897, location=point)
+
+        self.authenticate_as(self.driver_user)
+        url = reverse('taxi_api:driver-online-status')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['online'], True)
+        self.assertIsNotNone(response.data['active_car'])
+        self.assertEqual(response.data['active_car']['id'], self.car.id)
+        self.assertEqual(response.data['last_location']['lat'], 43.2389)
+        self.assertEqual(response.data['last_location']['lng'], 76.8897)
+        self.assertEqual(response.data['location_is_stale'], False)
+
+    def test_driver_online_status_online_stale_location(self):
+        point = Point(76.8897, 43.2389, srid=4326)
+        loc = CarLocation.objects.create(car=self.car, lat=43.2389, lng=76.8897, location=point)
+        # Force location to be stale
+        CarLocation.objects.filter(id=loc.id).update(updated_at=timezone.now() - timezone.timedelta(minutes=10))
+
+        self.authenticate_as(self.driver_user)
+        url = reverse('taxi_api:driver-online-status')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['online'], True)
+        self.assertTrue(response.data['location_is_stale'])
+
+    def test_driver_dashboard_contains_expected_sections(self):
+        point = Point(76.8897, 43.2389, srid=4326)
+        CarLocation.objects.create(car=self.car, lat=43.2389, lng=76.8897, location=point)
+
+        self.authenticate_as(self.driver_user)
+        url = reverse('taxi_api:driver-dashboard')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('user', response.data)
+        self.assertIn('driver_profile', response.data)
+        self.assertIn('cars', response.data)
+        self.assertIn('online_status', response.data)
+        self.assertIn('active_trip', response.data)
+        self.assertTrue(response.data['online_status']['online'])
+
+    def test_driver_earnings_summary(self):
+        # Completed trips for driver
+        trip1 = create_trip(self.customer, driver=self.driver_user, status='completed')
+        trip1.price = 1000
+        trip1.save(update_fields=['price'])
+        trip2 = create_trip(self.customer, driver=self.driver_user, status='completed')
+        trip2.price = 500
+        trip2.save(update_fields=['price'])
+
+        # Mark one payment as paid, other unpaid
+        Payment.objects.create(trip=trip1, amount=trip1.price, method='card', status='paid')
+        Payment.objects.create(trip=trip2, amount=trip2.price, method='cash', status='pending')
+
+        self.authenticate_as(self.driver_user)
+        url = reverse('taxi_api:driver-earnings')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['trips_completed'], 2)
+        self.assertEqual(response.data['gross'], 1500.0)
+        self.assertEqual(response.data['paid'], 1000.0)
+        self.assertEqual(response.data['unpaid'], 500.0)
 
 
 class PaymentTests(BaseTestCase):

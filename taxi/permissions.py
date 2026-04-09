@@ -67,18 +67,19 @@ class IsTripParticipantOrAdmin(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if has_role(request.user, 'admin'):
             return True
-
-        # If updating status to 'accepted', allow any driver
+        # For PATCH (status changes), we allow access to:
+        # - participants (customer/assigned driver)
+        # - drivers only for accepting unassigned requested trips
         if (
             request.method == 'PATCH' and
             isinstance(obj, Trip) and
             obj.status == 'requested' and
+            obj.driver_id is None and
             request.data.get('status') == 'accepted' and
             has_role(request.user, 'driver')
         ):
             return True
 
-        # Otherwise, must be actual participant
         return obj.customer == request.user or obj.driver == request.user
 
 

@@ -9,18 +9,7 @@ DEBUG = True
 
 HOST_IP = os.getenv('HOST_IP', 'localhost')
 
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    'host.docker.internal',
-    '10.0.2.2',   # эмулятор Android
-    '10.0.3.2',   # Genymotion
-    '172.17.0.1',
-    '192.168.0.107',
-]
-
-if HOST_IP and HOST_IP != 'localhost':
-    ALLOWED_HOSTS.append(HOST_IP)
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -154,57 +143,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False').lower() == 'true'
-HOST_IP = os.getenv('HOST_IP', 'localhost')
-
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:8081',
-    'http://localhost:8082',
-    'http://localhost:3000',
-    'http://localhost:19000',
-    'http://localhost:19001',
-    'http://localhost:19006',
-    'http://127.0.0.1:8081',
-    'http://127.0.0.1:8082',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:19000',
-    'http://127.0.0.1:19001',
-    'http://127.0.0.1:19006',
-    'http://10.0.2.2:8081',
-    'http://10.0.2.2:3000',
-    'http://10.0.3.2:8081',
-    'http://10.0.3.2:3000',
-    'exp://localhost:8081',
-    'exp://localhost:19000',
-    'exp://localhost:19001',
-    'exp://localhost:19006',
-    'exp://127.0.0.1:8081',
-    'exp://127.0.0.1:19000',
-    'exp://127.0.0.1:19001',
-    'exp://127.0.0.1:19006',
-    'http://192.168.1.100:8081',
-    'http://192.168.1.100:3000',
-    'http://192.168.1.100:19000',
-    'http://192.168.1.100:19001',
-    'http://192.168.1.100:19006',
-    'http://192.168.0.108:8000',
-    'http://192.168.0.107:8000'
-]
-
-if HOST_IP and HOST_IP not in ['localhost', '127.0.0.1']:
-    CORS_ALLOWED_ORIGINS.extend([
-        f'http://{HOST_IP}:8081',
-        f'http://{HOST_IP}:3000',
-        f'http://{HOST_IP}:19000',
-        f'http://{HOST_IP}:19001',
-        f'http://{HOST_IP}:19006',
-        f'http://{HOST_IP}:8000',
-        f'exp://{HOST_IP}:8081',
-        f'exp://{HOST_IP}:19000',
-        f'exp://{HOST_IP}:19001',
-        f'exp://{HOST_IP}:19006',
-    ])
-
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+
+# Driver location freshness (seconds). Used for nearby + auto-assign + driver accept.
+DRIVER_LOCATION_MAX_AGE_SECONDS = int(os.getenv('DRIVER_LOCATION_MAX_AGE_SECONDS', '60'))

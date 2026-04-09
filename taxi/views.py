@@ -1,5 +1,8 @@
 import logging
 from decimal import Decimal
+from django.conf import settings
+from django.utils import timezone
+from django.db.models import Sum, Count
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.db import transaction
@@ -275,6 +278,211 @@ class MyCarDetailView(generics.RetrieveUpdateAPIView):
         return Car.objects.filter(driver=self.request.user)
 
 
+class ActivateMyCarView(views.APIView):
+    """
+    Driver chooses which car is active (online).
+    Ensures only one active car per driver.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsDriver]
+
+    def post(self, request, id):
+        car = get_object_or_404(Car, id=id, driver=request.user)
+
+        with transaction.atomic():
+            Car.objects.filter(driver=request.user, is_active=True).exclude(id=car.id).update(is_active=False)
+            if not car.is_active:
+                car.is_active = True
+                car.save(update_fields=['is_active'])
+
+        return Response({'status': 'ok', 'active_car_id': car.id}, status=status.HTTP_200_OK)
+
+
+class GoOfflineView(views.APIView):
+    """Driver goes offline by deactivating all cars."""
+    permission_classes = [IsAuthenticatedAndActive, IsDriver]
+
+    def post(self, request):
+        Car.objects.filter(driver=request.user, is_active=True).update(is_active=False)
+        return Response({'status': 'ok', 'online': False}, status=status.HTTP_200_OK)
+
+
+class DriverOnlineStatusView(views.APIView):
+    """
+    Returns driver online status + active car + last location freshness.
+
+    Useful for driver app bootstrapping:
+    - decide whether to show "Go online" or "Go offline"
+    - prompt user to enable location updates if stale
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsDriver]
+
+    def get(self, request):
+        user = request.user
+        active_car = Car.objects.filter(driver=user, is_active=True).select_related('brand', 'car_type').first()
+
+        max_age = getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+        cutoff = timezone.now() - timezone.timedelta(seconds=max_age)
+
+        last_location = None
+        location_is_stale = True
+
+        if active_car:
+            last_location = CarLocation.objects.filter(car=active_car).order_by('-updated_at').first()
+            if last_location and last_location.updated_at and last_location.updated_at >= cutoff:
+                location_is_stale = False
+
+        return Response({
+            'online': bool(active_car),
+            'active_car': {
+                'id': active_car.id,
+                'plate_number': active_car.plate_number,
+                'brand': active_car.brand.name,
+                'car_type': active_car.car_type.code,
+                'year': active_car.year,
+            } if active_car else None,
+            'last_location': {
+                'lat': last_location.lat,
+                'lng': last_location.lng,
+                'updated_at': last_location.updated_at,
+            } if last_location else None,
+            'location_is_stale': location_is_stale,
+            'location_max_age_seconds': int(max_age),
+        }, status=status.HTTP_200_OK)
+
+
+class DriverDashboardView(views.APIView):
+    """
+    Single endpoint for driver app bootstrap.
+
+    Returns:
+    - user + driver profile
+    - driver cars (including which one is active)
+    - online-status (active car + last location freshness)
+    - active trip if exists (assigned trip)
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsDriver]
+
+    def get(self, request):
+        user = request.user
+
+        # Profiles
+        user_data = UserProfileSerializer(user, context={'request': request}).data
+        driver_profile = getattr(user, 'driverprofile', None)
+        driver_profile_data = (
+            DriverProfileSerializer(driver_profile, context={'request': request}).data
+            if driver_profile else None
+        )
+
+        # Cars
+        cars_qs = Car.objects.filter(driver=user).select_related('brand', 'car_type').order_by('-is_active', 'id')
+        cars_data = CarSerializer(cars_qs, many=True, context={'request': request}).data
+
+        # Online status + last location
+        active_car = cars_qs.filter(is_active=True).first()
+        max_age = getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+        cutoff = timezone.now() - timezone.timedelta(seconds=max_age)
+
+        last_location = None
+        location_is_stale = True
+        if active_car:
+            last_location = CarLocation.objects.filter(car=active_car).order_by('-updated_at').first()
+            if last_location and last_location.updated_at and last_location.updated_at >= cutoff:
+                location_is_stale = False
+
+        # Active trip (driver side)
+        active_trip = Trip.objects.filter(driver=user, status__in=['accepted', 'on_route']).first()
+        active_trip_data = (
+            TripDetailSerializer(active_trip, context={'request': request}).data
+            if active_trip else None
+        )
+
+        return Response({
+            'user': user_data,
+            'driver_profile': driver_profile_data,
+            'cars': cars_data,
+            'online_status': {
+                'online': bool(active_car),
+                'active_car_id': active_car.id if active_car else None,
+                'last_location': {
+                    'lat': last_location.lat,
+                    'lng': last_location.lng,
+                    'updated_at': last_location.updated_at,
+                } if last_location else None,
+                'location_is_stale': location_is_stale,
+                'location_max_age_seconds': int(max_age),
+            },
+            'active_trip': active_trip_data,
+        }, status=status.HTTP_200_OK)
+
+
+class DriverEarningsView(views.APIView):
+    """
+    Driver earnings summary derived from completed trips and payments.
+
+    Query params:
+      - from: ISO date/datetime (optional)
+      - to: ISO date/datetime (optional)
+
+    Notes:
+      - "gross" is sum of Trip.price for completed trips
+      - "paid" is sum of Payment.amount where payment.status='paid'
+      - "unpaid" is gross - paid (includes pending/failed/no payment)
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsDriver]
+
+    def get(self, request):
+        user = request.user
+        qs = Trip.objects.filter(driver=user, status='completed')
+
+        date_from = request.query_params.get('from')
+        date_to = request.query_params.get('to')
+
+        if date_from:
+            try:
+                dt_from = timezone.datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+                if timezone.is_naive(dt_from):
+                    dt_from = timezone.make_aware(dt_from, timezone.get_current_timezone())
+                qs = qs.filter(created_at__gte=dt_from)
+            except Exception:
+                return Response({'error': 'Invalid from date. Use ISO format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if date_to:
+            try:
+                dt_to = timezone.datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+                if timezone.is_naive(dt_to):
+                    dt_to = timezone.make_aware(dt_to, timezone.get_current_timezone())
+                qs = qs.filter(created_at__lte=dt_to)
+            except Exception:
+                return Response({'error': 'Invalid to date. Use ISO format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        agg = qs.aggregate(
+            trips_completed=Count('id'),
+            gross=Sum('price'),
+        )
+        gross = agg['gross'] or Decimal('0.00')
+        trips_completed = agg['trips_completed'] or 0
+
+        paid_qs = Payment.objects.filter(trip__in=qs, status='paid')
+        paid_agg = paid_qs.aggregate(paid=Sum('amount'))
+        paid = paid_agg['paid'] or Decimal('0.00')
+
+        unpaid = gross - paid
+        if unpaid < 0:
+            unpaid = Decimal('0.00')
+
+        return Response({
+            'trips_completed': trips_completed,
+            'gross': float(gross),
+            'paid': float(paid),
+            'unpaid': float(unpaid),
+            'currency': 'KZT',
+            'range': {
+                'from': date_from,
+                'to': date_to,
+            }
+        }, status=status.HTTP_200_OK)
+
+
 class AdminCarDetailView(generics.RetrieveAPIView):
     serializer_class = CarSerializer
     permission_classes = [IsAuthenticatedAndActive, IsAdmin]
@@ -378,9 +586,14 @@ class NearbyCarsView(views.APIView):
 
         point = Point(lng, lat, srid=4326)
 
+        cutoff = timezone.now() - timezone.timedelta(
+            seconds=getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+        )
+
         queryset = Car.objects.filter(
             is_active=True,
-            carlocation__isnull=False
+            carlocation__isnull=False,
+            carlocation__updated_at__gte=cutoff,
         ).select_related('brand', 'car_type', 'driver', 'carlocation')
 
         if tariff_code:
@@ -575,9 +788,14 @@ class TripCreateView(generics.CreateAPIView):
 
         point = Point(trip.start_lng, trip.start_lat, srid=4326)
 
+        cutoff = timezone.now() - timezone.timedelta(
+            seconds=getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+        )
+
         available_cars = Car.objects.filter(
             is_active=True,
             carlocation__isnull=False,
+            carlocation__updated_at__gte=cutoff,
             car_type_id__in=car_type_ids
         ).exclude(
             driver_id__in=busy_driver_ids
@@ -699,8 +917,13 @@ class CancelTripView(views.APIView):
 
     def post(self, request, id):
         trip = get_object_or_404(Trip, id=id)
+        serializer = TripCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
         trip.status = 'cancelled'
-        trip.save(update_fields=['status'])
+        trip.cancelled_at = timezone.now()
+        trip.cancelled_by = request.user
+        trip.cancel_reason = serializer.validated_data.get('reason', '') or ''
+        trip.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason'])
         return Response({"status": "Trip cancelled"})
 
 

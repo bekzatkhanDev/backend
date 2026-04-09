@@ -8,6 +8,8 @@ from .models import (
     User, Role, UserRole, DriverProfile, CarBrand, CarType,
     Car, CarLocation, Tariff, CarTypeTariff, Trip, Review, Payment
 )
+from django.conf import settings
+from django.utils import timezone
 
 
 # ======================
@@ -295,6 +297,7 @@ class TripStatusUpdateSerializer(serializers.ModelSerializer):
 
     def validate_status(self, value):
         instance = self.instance
+        user = self.context['request'].user
         valid_transitions = {
             'requested': ['accepted', 'cancelled'],
             'accepted': ['on_route', 'cancelled'],
@@ -304,12 +307,53 @@ class TripStatusUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Invalid current status.")
         if value not in valid_transitions[instance.status]:
             raise serializers.ValidationError(f"Cannot transition from {instance.status} to {value}.")
+
+        # Role/ownership enforcement
+        is_admin = user.userrole_set.filter(role__code='admin').exists()
+        is_driver = user.userrole_set.filter(role__code='driver').exists()
+        is_customer = user.userrole_set.filter(role__code='customer').exists()
+
+        if value == 'accepted':
+            # Only a driver can accept an unassigned requested trip.
+            if not (is_driver or is_admin):
+                raise serializers.ValidationError("Only drivers can accept trips.")
+            if instance.driver_id is not None:
+                raise serializers.ValidationError("Trip is already assigned.")
+
+            # Driver must be online (active car) and have a fresh location
+            active_car = Car.objects.filter(driver=user, is_active=True).first()
+            if not active_car:
+                raise serializers.ValidationError("You must activate a car (go online) before accepting trips.")
+
+            cutoff = timezone.now() - timezone.timedelta(
+                seconds=getattr(settings, 'DRIVER_LOCATION_MAX_AGE_SECONDS', 60)
+            )
+            has_fresh_location = CarLocation.objects.filter(car=active_car, updated_at__gte=cutoff).exists()
+            if not has_fresh_location:
+                raise serializers.ValidationError("Your location is stale. Update location before accepting trips.")
+
+        if value in ['on_route', 'completed']:
+            if not (is_driver or is_admin):
+                raise serializers.ValidationError("Only drivers can update trip progress.")
+            if not is_admin and instance.driver_id != user.id:
+                raise serializers.ValidationError("You are not assigned to this trip.")
+
+        if value == 'cancelled':
+            # Participants can cancel; admin can cancel any.
+            if not is_admin and user not in [instance.customer, instance.driver]:
+                raise serializers.ValidationError("Only trip participants can cancel.")
+
         return value
 
     def update(self, instance, validated_data):
+        user = self.context['request'].user
         status = validated_data.get('status')
         if status == 'accepted':
-            instance.driver = self.context['request'].user
+            instance.driver = user
+            instance.car = Car.objects.filter(driver=user, is_active=True).first()
+        if status == 'cancelled':
+            instance.cancelled_at = timezone.now()
+            instance.cancelled_by = user
         instance.status = status
         instance.save()
         return instance

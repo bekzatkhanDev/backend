@@ -21,10 +21,15 @@ urlpatterns = [
     # === Профиль водителя ===
     path('drivers/profile/', views.DriverProfileCreateView.as_view(), name='driver-profile-create'),
     path('drivers/profile/me/', views.DriverProfileMeView.as_view(), name='driver-profile-me'),
+    path('drivers/me/online-status/', views.DriverOnlineStatusView.as_view(), name='driver-online-status'),
+    path('drivers/me/dashboard/', views.DriverDashboardView.as_view(), name='driver-dashboard'),
+    path('drivers/me/earnings/', views.DriverEarningsView.as_view(), name='driver-earnings'),
 
     # === 3. Автомобили водителя ===
     path('drivers/cars/', views.MyCarsListView.as_view(), name='my-cars-list'),
     path('drivers/cars/<int:id>/', views.MyCarDetailView.as_view(), name='my-car-detail'),
+    path('drivers/cars/<int:id>/activate/', views.ActivateMyCarView.as_view(), name='my-car-activate'),
+    path('drivers/offline/', views.GoOfflineView.as_view(), name='driver-offline'),
     path('cars/<int:id>/', views.AdminCarDetailView.as_view(), name='admin-car-detail'),
 
     # === 4. Справочники ===
