@@ -4,7 +4,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
 from .models import (
     User, Role, UserRole, DriverProfile, CarBrand, CarType,
-    Car, CarLocation, Tariff, CarTypeTariff, Trip, Review, Payment
+    Car, CarLocation, Tariff, CarTypeTariff, Trip, Review, Payment,
+    TripChatRoom, ChatMessage, TripShareToken
 )
 
 
@@ -156,3 +157,64 @@ class PaymentAdmin(admin.ModelAdmin):
     def trip_id(self, obj):
         return str(obj.trip.id)[:8]
     trip_id.short_description = 'Trip (short ID)'
+
+
+@admin.register(TripChatRoom)
+class TripChatRoomAdmin(admin.ModelAdmin):
+    list_display = ('id', 'trip_id', 'created_at', 'updated_at', 'message_count')
+    list_filter = ('created_at',)
+    search_fields = ('trip__id',)
+    raw_id_fields = ('trip',)
+    readonly_fields = ('id', 'created_at', 'updated_at')
+
+    def trip_id(self, obj):
+        return str(obj.trip.id)[:8]
+    trip_id.short_description = 'Trip (short ID)'
+
+    def message_count(self, obj):
+        return obj.messages.count()
+    message_count.short_description = 'Messages'
+
+
+@admin.register(ChatMessage)
+class ChatMessageAdmin(admin.ModelAdmin):
+    list_display = ('id', 'chat_room_trip', 'sender_phone', 'text_preview', 'is_read', 'created_at')
+    list_filter = ('is_read', 'created_at', 'chat_room__trip__status')
+    search_fields = ('sender__phone', 'text', 'chat_room__trip__id')
+    raw_id_fields = ('chat_room', 'sender')
+    readonly_fields = ('id', 'created_at')
+    ordering = ['-created_at']
+
+    def chat_room_trip(self, obj):
+        return str(obj.chat_room.trip.id)[:8]
+    chat_room_trip.short_description = 'Trip (short ID)'
+
+    def sender_phone(self, obj):
+        return obj.sender.phone
+    sender_phone.short_description = 'Sender'
+
+    def text_preview(self, obj):
+        return obj.text[:50] + ('...' if len(obj.text) > 50 else '')
+    text_preview.short_description = 'Message'
+
+@admin.register(TripShareToken)
+class TripShareTokenAdmin(admin.ModelAdmin):
+    list_display = ('id', 'trip_id', 'token_short', 'is_active', 'is_expired_display', 'expires_at', 'accessed_count', 'created_at')
+    list_filter = ('is_active', 'expires_at', 'created_at')
+    search_fields = ('trip__id', 'token')
+    raw_id_fields = ('trip',)
+    readonly_fields = ('id', 'token', 'created_at', 'accessed_count', 'is_expired')
+    ordering = ['-created_at']
+
+    def trip_id(self, obj):
+        return str(obj.trip.id)[:8]
+    trip_id.short_description = 'Trip (short ID)'
+
+    def token_short(self, obj):
+        return str(obj.token)[:8] + '...'
+    token_short.short_description = 'Token (short)'
+
+    def is_expired_display(self, obj):
+        return obj.is_expired
+    is_expired_display.short_description = 'Expired'
+    is_expired_display.boolean = True

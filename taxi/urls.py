@@ -62,4 +62,14 @@ urlpatterns = [
     path('payments/', views.CreatePaymentView.as_view(), name='payment-create'),
     path('payments/<int:id>/', views.PaymentDetailView.as_view(), name='payment-detail'),
     path('payments/trip/<uuid:trip_id>/', views.PaymentByTripView.as_view(), name='payment-by-trip'),
+
+    # === 10. Чат ===
+    path('trips/<uuid:id>/chat-room/', views.TripChatRoomView.as_view(), name='trip-chat-room'),
+    path('trips/<uuid:trip_id>/messages/', views.ChatMessageListView.as_view(), name='chat-message-list'),
+    path('trips/<uuid:trip_id>/messages/send/', views.ChatMessageCreateView.as_view(), name='chat-message-create'),
+
+    # === 11. Trip Sharing ===
+    path('trips/<uuid:trip_id>/share-token/', views.CreateTripShareTokenView.as_view(), name='create-trip-share-token'),
+    path('trips/<uuid:trip_id>/share-tokens/', views.TripShareTokenListView.as_view(), name='trip-share-token-list'),
+    path('trips/share/<uuid:token>/', views.PublicTripDetailView.as_view(), name='public-trip-detail'),
 ]
