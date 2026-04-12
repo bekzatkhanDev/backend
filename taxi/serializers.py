@@ -6,7 +6,8 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 
 from .models import (
     User, Role, UserRole, DriverProfile, CarBrand, CarType,
-    Car, CarLocation, Tariff, CarTypeTariff, Trip, Review, Payment
+    Car, CarLocation, Tariff, CarTypeTariff, Trip, Review, Payment,
+    TripChatRoom, ChatMessage, TripShareToken
 )
 from django.conf import settings
 from django.utils import timezone
@@ -434,3 +435,71 @@ class PaymentSerializer(serializers.ModelSerializer):
         model = Payment
         fields = ('id', 'trip', 'amount', 'method', 'status', 'created_at')
         read_only_fields = ('amount', 'status')
+
+
+# ======================
+# 8. Chat Messages
+# ======================
+
+class ChatMessageSerializer(serializers.ModelSerializer):
+    sender = UserProfileSerializer(read_only=True)
+
+    class Meta:
+        model = ChatMessage
+        fields = ('id', 'sender', 'text', 'is_read', 'created_at')
+        read_only_fields = ('sender', 'is_read', 'created_at')
+
+
+class TripChatRoomSerializer(serializers.ModelSerializer):
+    messages = ChatMessageSerializer(many=True, read_only=True)
+    trip_id = serializers.UUIDField(source='trip.id', read_only=True)
+
+    class Meta:
+        model = TripChatRoom
+        fields = ('id', 'trip_id', 'created_at', 'updated_at', 'messages')
+
+
+class ChatMessageCreateSerializer(serializers.Serializer):
+    text = serializers.CharField(max_length=1000)
+
+    def validate_text(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Message cannot be empty")
+        return value.strip()
+
+
+# ======================
+# 9. Trip Sharing
+# ======================
+
+class TripShareTokenSerializer(serializers.ModelSerializer):
+    """Serializer for displaying trip share token info."""
+    trip_id = serializers.UUIDField(source='trip.id', read_only=True)
+    share_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = TripShareToken
+        fields = ('id', 'trip_id', 'token', 'share_url', 'expires_at', 'is_active', 'created_at', 'accessed_count')
+        read_only_fields = ('token', 'created_at', 'accessed_count')
+    
+    def get_share_url(self, obj):
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(f'/api/trips/share/{obj.token}/')
+        return f'/api/trips/share/{obj.token}/'
+
+
+class TripSharePublicSerializer(serializers.ModelSerializer):
+    """Public serializer for shared trip - shows limited info to token holders."""
+    customer = UserProfileSerializer(read_only=True)
+    driver = UserProfileSerializer(read_only=True)
+    car = CarSerializer(read_only=True)
+    tariff = TariffSerializer(read_only=True)
+    
+    class Meta:
+        model = Trip
+        fields = (
+            'id', 'customer', 'driver', 'car', 'tariff',
+            'start_lat', 'start_lng', 'end_lat', 'end_lng',
+            'distance_km', 'price', 'status', 'created_at'
+        )
