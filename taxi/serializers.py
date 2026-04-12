@@ -420,20 +420,13 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
 
     def validate_trip(self, value):
         user = self.context['request'].user
-        
-        # Платёж может создать только пассажир поездки
+
         if value.customer != user:
             raise serializers.ValidationError("You can only pay for your own trips.")
-        
-        # Оплата только по завершённой поездке
-        if value.status != 'completed':
-            raise serializers.ValidationError("Payment can only be made for completed trips.")
-        
-        if hasattr(value, 'payment'):
-            raise serializers.ValidationError("Payment for this trip already exists.")
+
         if Payment.objects.filter(trip=value).exists():
             raise serializers.ValidationError("Payment for this trip already exists.")
-        
+
         return value
 
 
