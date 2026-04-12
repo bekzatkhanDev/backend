@@ -16,7 +16,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .models import (
     User, Role, UserRole, DriverProfile, Car, CarLocation, CarBrand, CarType,
-    Tariff, CarTypeTariff, Trip, Review, Payment
+    Tariff, CarTypeTariff, Trip, Review, Payment, TripChatRoom, ChatMessage, TripShareToken
 )
 from .serializers import (
     RegisterSerializer, LoginResponseSerializer, RefreshTokenSerializer,
@@ -27,7 +27,9 @@ from .serializers import (
     NearbyCarSerializer, TripEstimateRequestSerializer, TripEstimateResponseSerializer,
     TripCreateSerializer, TripDetailSerializer, TripStatusUpdateSerializer,
     TripCancelSerializer, ReviewCreateSerializer, ReviewSerializer,
-    PaymentCreateSerializer, PaymentSerializer, BulkTariffEstimateRequestSerializer
+    PaymentCreateSerializer, PaymentSerializer, BulkTariffEstimateRequestSerializer,
+    ChatMessageSerializer, TripChatRoomSerializer, ChatMessageCreateSerializer,
+    TripShareTokenSerializer, TripSharePublicSerializer
 )
 from .permissions import (
     IsAuthenticatedAndActive, IsAdmin, IsCustomer, IsDriver,
@@ -1012,3 +1014,167 @@ class PaymentByTripView(generics.RetrieveAPIView):
     
     def get_queryset(self):
         return Payment.objects.select_related('trip')
+
+
+# ======================
+# 11. Chat
+# ======================
+
+class TripChatRoomView(views.APIView):
+    """
+    Get or create chat room for a trip.
+    Chat room is only created when driver is assigned to the trip.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsTripParticipantOrAdmin]
+
+    def get(self, request, id):
+        trip = get_object_or_404(Trip, id=id)
+        
+        # Check if driver is assigned
+        if not trip.driver_id:
+            return Response({
+                'detail': 'Chat room not available. Driver must be assigned first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create chat room
+        chat_room, created = TripChatRoom.objects.get_or_create(trip=trip)
+        serializer = TripChatRoomSerializer(chat_room, context={'request': request})
+        return Response(serializer.data)
+
+
+class ChatMessageListView(generics.ListAPIView):
+    """
+    List all messages in a trip chat room.
+    """
+    serializer_class = ChatMessageSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsTripParticipantOrAdmin]
+
+    def get_queryset(self):
+        trip_id = self.kwargs['trip_id']
+        trip = get_object_or_404(Trip, id=trip_id)
+        
+        # Only return messages if driver is assigned
+        if not trip.driver_id:
+            return ChatMessage.objects.none()
+        
+        try:
+            chat_room = TripChatRoom.objects.get(trip=trip)
+            return ChatMessage.objects.filter(chat_room=chat_room).select_related('sender')
+        except TripChatRoom.DoesNotExist:
+            return ChatMessage.objects.none()
+
+
+class ChatMessageCreateView(views.APIView):
+    """
+    Create a new message in a trip chat room via REST API.
+    This is an alternative to WebSocket for sending messages.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsTripParticipantOrAdmin]
+
+    def post(self, request, trip_id):
+        trip = get_object_or_404(Trip, id=trip_id)
+        
+        # Check if driver is assigned
+        if not trip.driver_id:
+            return Response({
+                'detail': 'Cannot send message. Driver must be assigned first.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create chat room
+        chat_room, created = TripChatRoom.objects.get_or_create(trip=trip)
+        
+        # Validate and create message
+        serializer = ChatMessageCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        message = ChatMessage.objects.create(
+            chat_room=chat_room,
+            sender=request.user,
+            text=serializer.validated_data['text']
+        )
+        
+        response_serializer = ChatMessageSerializer(message, context={'request': request})
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# ======================
+# 11. Trip Sharing
+# ======================
+
+class CreateTripShareTokenView(views.APIView):
+    """
+    Create a shareable token for a trip.
+    Only trip participants (customer or driver) can create share tokens.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsTripParticipantOrAdmin]
+
+    def post(self, request, trip_id):
+        trip = get_object_or_404(Trip, id=trip_id)
+        
+        # Optional: hours until expiration (default 24)
+        hours_valid = request.data.get('hours_valid', 24)
+        try:
+            hours_valid = int(hours_valid)
+            if hours_valid < 1 or hours_valid > 168:  # max 1 week
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({
+                'detail': 'hours_valid must be between 1 and 168 hours'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Invalidate any existing active tokens for this trip
+        TripShareToken.objects.filter(trip=trip, is_active=True).update(is_active=False)
+        
+        # Create new token
+        share_token = TripShareToken.create_for_trip(trip, hours_valid=hours_valid)
+        
+        serializer = TripShareTokenSerializer(share_token, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class TripShareTokenListView(generics.ListAPIView):
+    """
+    List all share tokens for a specific trip.
+    Only trip participants can view tokens.
+    """
+    serializer_class = TripShareTokenSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsTripParticipantOrAdmin]
+
+    def get_queryset(self):
+        trip_id = self.kwargs['trip_id']
+        trip = get_object_or_404(Trip, id=trip_id)
+        return TripShareToken.objects.filter(trip=trip).order_by('-created_at')
+
+
+class PublicTripDetailView(views.APIView):
+    """
+    Public endpoint to view trip details using a share token.
+    No authentication required - token validation only.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, token):
+        try:
+            share_token = TripShareToken.objects.select_related('trip').get(token=token)
+        except TripShareToken.DoesNotExist:
+            return Response({
+                'detail': 'Invalid or expired share token'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if token is active and not expired
+        if not share_token.is_active or share_token.is_expired:
+            return Response({
+                'detail': 'This share link has expired or been deactivated'
+            }, status=status.HTTP_410_GONE)
+
+        # Increment access count
+        share_token.accessed_count += 1
+        share_token.save(update_fields=['accessed_count'])
+
+        # Return limited trip information
+        serializer = TripSharePublicSerializer(
+            share_token.trip, 
+            context={'request': request}
+        )
+        return Response(serializer.data)

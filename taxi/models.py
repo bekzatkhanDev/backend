@@ -205,3 +205,78 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"Payment for {self.trip.id} – {self.status}"
+
+
+class TripChatRoom(models.Model):
+    """
+    Chat room for a specific trip.
+    Created only when a driver is assigned to the trip.
+    """
+    trip = models.OneToOneField(Trip, on_delete=models.CASCADE, related_name='chat_room')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Trip Chat Room'
+        verbose_name_plural = 'Trip Chat Rooms'
+
+    def __str__(self):
+        return f"Chat room for Trip {self.trip.id}"
+
+
+class ChatMessage(models.Model):
+    """
+    Individual message in a trip chat room.
+    """
+    chat_room = models.ForeignKey(TripChatRoom, on_delete=models.CASCADE, related_name='messages')
+    sender = models.ForeignKey(User, on_delete=models.CASCADE, related_name='sent_messages')
+    text = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+        verbose_name = 'Chat Message'
+        verbose_name_plural = 'Chat Messages'
+
+    def __str__(self):
+        return f"Message from {self.sender.phone} at {self.created_at}"
+
+
+class TripShareToken(models.Model):
+    """
+    Shareable token for trip tracking.
+    Allows anyone with the token to view trip status without authentication.
+    """
+    trip = models.ForeignKey(Trip, on_delete=models.CASCADE, related_name='share_tokens')
+    token = models.UUIDField(unique=True, editable=False)
+    expires_at = models.DateTimeField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    accessed_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = 'Trip Share Token'
+        verbose_name_plural = 'Trip Share Tokens'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Share token for Trip {self.trip.id}"
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            import uuid
+            self.token = uuid.uuid4()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+
+    @classmethod
+    def create_for_trip(cls, trip, hours_valid=24):
+        """Create a new share token for a trip."""
+        from django.utils import timezone
+        expires_at = timezone.now() + timezone.timedelta(hours=hours_valid)
+        return cls.objects.create(trip=trip, expires_at=expires_at)

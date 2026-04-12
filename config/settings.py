@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'leaflet',
     'corsheaders',
+    'channels',
     'taxi.apps.TaxiConfig',
 ]
 
@@ -55,7 +56,17 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
+ASGI_APPLICATION = 'config.asgi.application'
 
+# Channels layer configuration (Redis)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [('redis', 6379)],
+        },
+    },
+}
 
 DATABASES = {
     'default': {
