@@ -118,6 +118,9 @@ SIMPLE_JWT = {
     'JTI_CLAIM': 'jti',
 }
 
+# Frontend base URL for generating share links (Expo web dev server)
+FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', 'http://localhost:8081')
+
 AUTH_USER_MODEL = 'taxi.User'
 
 ACCOUNT_USER_MODEL_EMAIL_FIELD = None

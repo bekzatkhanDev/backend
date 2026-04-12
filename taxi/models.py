@@ -190,6 +190,9 @@ class Payment(models.Model):
     METHOD_CHOICES = [
         ('cash', 'Cash'),
         ('card', 'Card'),
+        ('kaspi', 'Kaspi Bank'),
+        ('halyk', 'Halyk Bank'),
+        ('freedom', 'Freedom Bank'),
     ]
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -199,7 +202,7 @@ class Payment(models.Model):
 
     trip = models.OneToOneField(Trip, on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    method = models.CharField(max_length=10, choices=METHOD_CHOICES)
+    method = models.CharField(max_length=20, choices=METHOD_CHOICES)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
 

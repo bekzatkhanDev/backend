@@ -992,12 +992,27 @@ class CreatePaymentView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         trip = serializer.validated_data['trip']
-        amount = trip.price
+        amount = trip.price or 0
+        method = serializer.validated_data['method']
+
+        # Idempotent: reuse an existing paid payment; replace pending/failed ones.
+        existing = Payment.objects.filter(trip=trip).first()
+        if existing:
+            if existing.status == 'paid':
+                serializer.instance = existing
+                return
+            # Update the stale payment instead of creating a duplicate.
+            existing.method = method
+            existing.status = 'paid'
+            existing.save(update_fields=['method', 'status'])
+            serializer.instance = existing
+            return
+
         payment = Payment.objects.create(
             trip=trip,
             amount=amount,
-            method=serializer.validated_data['method'],
-            status='pending'
+            method=method,
+            status='paid',
         )
         serializer.instance = payment
 

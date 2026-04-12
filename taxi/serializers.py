@@ -424,8 +424,9 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
         if value.customer != user:
             raise serializers.ValidationError("You can only pay for your own trips.")
 
-        if Payment.objects.filter(trip=value).exists():
-            raise serializers.ValidationError("Payment for this trip already exists.")
+        # Block only if a successful payment already exists; pending/failed can be retried.
+        if Payment.objects.filter(trip=value, status='paid').exists():
+            raise serializers.ValidationError("This trip has already been paid.")
 
         return value
 
@@ -483,10 +484,9 @@ class TripShareTokenSerializer(serializers.ModelSerializer):
         read_only_fields = ('token', 'created_at', 'accessed_count')
     
     def get_share_url(self, obj):
-        request = self.context.get('request')
-        if request:
-            return request.build_absolute_uri(f'/api/trips/share/{obj.token}/')
-        return f'/api/trips/share/{obj.token}/'
+        from django.conf import settings as django_settings
+        base = getattr(django_settings, 'FRONTEND_BASE_URL', 'http://localhost:8081')
+        return f'{base}/tracks/{obj.token}'
 
 
 class TripSharePublicSerializer(serializers.ModelSerializer):
