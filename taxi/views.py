@@ -2,12 +2,13 @@ import logging
 from decimal import Decimal
 from django.conf import settings
 from django.utils import timezone
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Q
 from django.contrib.gis.db.models.functions import Distance
 from django.contrib.gis.geos import Point
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status, generics, views
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -22,14 +23,16 @@ from .serializers import (
     RegisterSerializer, LoginResponseSerializer, RefreshTokenSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     UserProfileSerializer, AdminUserListSerializer, AdminUserRoleUpdateSerializer,
-    DriverProfileSerializer, CarSerializer, CarBrandSerializer, CarTypeSerializer,CarLocationSerializer,
+    DriverProfileSerializer, CarSerializer, CarBrandSerializer, CarTypeSerializer, CarLocationSerializer,
     TariffSerializer, UpdateLocationSerializer, NearbyCarsRequestSerializer,
     NearbyCarSerializer, TripEstimateRequestSerializer, TripEstimateResponseSerializer,
     TripCreateSerializer, TripDetailSerializer, TripStatusUpdateSerializer,
     TripCancelSerializer, ReviewCreateSerializer, ReviewSerializer,
     PaymentCreateSerializer, PaymentSerializer, BulkTariffEstimateRequestSerializer,
     ChatMessageSerializer, TripChatRoomSerializer, ChatMessageCreateSerializer,
-    TripShareTokenSerializer, TripSharePublicSerializer
+    TripShareTokenSerializer, TripSharePublicSerializer,
+    AdminUserDetailSerializer, AdminDriverListSerializer, AdminDriverDetailSerializer,
+    AdminTripListSerializer, AdminTripDetailSerializer,
 )
 from .permissions import (
     IsAuthenticatedAndActive, IsAdmin, IsCustomer, IsDriver,
@@ -210,11 +213,21 @@ class CurrentUserProfileView(generics.RetrieveUpdateAPIView):
 class AdminUserListView(generics.ListAPIView):
     serializer_class = AdminUserListSerializer
     permission_classes = [IsAuthenticatedAndActive, IsAdmin]
-    queryset = User.objects.all()
+
+    def get_queryset(self):
+        qs = User.objects.prefetch_related('userrole_set__role').order_by('-id')
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(phone__icontains=search) |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)
+            )
+        return qs
 
 
 class AdminUserDetailView(generics.RetrieveAPIView):
-    serializer_class = AdminUserListSerializer
+    serializer_class = AdminUserDetailSerializer
     permission_classes = [IsAuthenticatedAndActive, IsAdmin]
     lookup_field = 'id'
     queryset = User.objects.all()
@@ -235,6 +248,268 @@ class AdminUserRoleUpdateView(views.APIView):
             UserRole(user=user, role=role) for role in roles
         ])
         return Response({"roles": codes})
+
+
+# ======================
+# Admin Panel
+# ======================
+
+class AdminPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class AdminDashboardView(views.APIView):
+    """
+    GET /admin/dashboard/
+    Returns platform-wide stats and the 10 most recent trips.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def get(self, request):
+        today = timezone.now().date()
+
+        total_users = User.objects.count()
+        total_drivers = User.objects.filter(userrole__role__code='driver').distinct().count()
+        online_drivers = Car.objects.filter(is_active=True).values('driver').distinct().count()
+        trips_today = Trip.objects.filter(created_at__date=today).count()
+        revenue_today = Trip.objects.filter(
+            created_at__date=today,
+            status='completed',
+            price__isnull=False,
+        ).aggregate(total=Sum('price'))['total'] or 0
+
+        recent_trips = Trip.objects.select_related(
+            'customer', 'driver', 'tariff'
+        ).order_by('-created_at')[:10]
+
+        return Response({
+            'total_users': total_users,
+            'total_drivers': total_drivers,
+            'online_drivers': online_drivers,
+            'trips_today': trips_today,
+            'revenue_today': str(revenue_today),
+            'recent_trips': AdminTripListSerializer(recent_trips, many=True).data,
+        })
+
+
+class AdminUserSuspendView(views.APIView):
+    """
+    PATCH /admin/users/<id>/suspend/
+    Body: { "is_active": true|false }
+    Activates or suspends a user account.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def patch(self, request, id):
+        user = get_object_or_404(User, id=id)
+        if user == request.user:
+            return Response(
+                {'error': 'You cannot suspend your own account'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        is_active = request.data.get('is_active')
+        if is_active is None:
+            return Response(
+                {'error': 'is_active field is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user.is_active = bool(is_active)
+        user.save(update_fields=['is_active'])
+        return Response({'id': user.id, 'is_active': user.is_active})
+
+
+class AdminDriverListView(generics.ListAPIView):
+    """
+    GET /admin/drivers/
+    Query params:
+      ?status=pending   — not yet verified, account active
+      ?status=active    — verified and active
+      ?status=suspended — account deactivated
+      ?search=          — filter by name or phone
+    """
+    serializer_class = AdminDriverListSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    pagination_class = AdminPagination
+
+    def get_queryset(self):
+        qs = User.objects.filter(
+            userrole__role__code='driver'
+        ).prefetch_related(
+            'userrole_set__role', 'cars'
+        ).select_related('driverprofile').distinct().order_by('-id')
+
+        status_filter = self.request.query_params.get('status')
+        if status_filter == 'pending':
+            qs = qs.filter(is_verified=False, is_active=True)
+        elif status_filter == 'active':
+            qs = qs.filter(is_verified=True, is_active=True)
+        elif status_filter == 'suspended':
+            qs = qs.filter(is_active=False)
+
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(phone__icontains=search) |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)
+            )
+        return qs
+
+
+class AdminDriverDetailView(generics.RetrieveAPIView):
+    """
+    GET /admin/drivers/<id>/
+    Full driver profile: user info, driver profile, cars, stats.
+    """
+    serializer_class = AdminDriverDetailSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    lookup_field = 'id'
+
+    def get_queryset(self):
+        return User.objects.filter(
+            userrole__role__code='driver'
+        ).prefetch_related(
+            'userrole_set__role', 'cars__brand', 'cars__car_type'
+        ).select_related('driverprofile').distinct()
+
+
+class AdminDriverApproveView(views.APIView):
+    """
+    PATCH /admin/drivers/<id>/approve/
+    Sets is_verified=True and is_active=True for the driver.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def patch(self, request, id):
+        user = get_object_or_404(User, id=id)
+        if not has_role(user, 'driver'):
+            return Response(
+                {'error': 'User does not have the driver role'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user.is_verified = True
+        user.is_active = True
+        user.save(update_fields=['is_verified', 'is_active'])
+        return Response({
+            'id': user.id,
+            'is_verified': user.is_verified,
+            'is_active': user.is_active,
+        })
+
+
+class AdminDriverReactivateView(views.APIView):
+    """
+    PATCH /admin/drivers/<id>/reactivate/
+    Restores a suspended driver: sets is_active=True.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def patch(self, request, id):
+        user = get_object_or_404(User, id=id)
+        if not user.userrole_set.filter(role__code='driver').exists():
+            return Response({'error': 'User is not a driver'}, status=status.HTTP_400_BAD_REQUEST)
+        if user.is_active:
+            return Response({'error': 'Driver is not suspended'}, status=status.HTTP_400_BAD_REQUEST)
+        user.is_active = True
+        user.save(update_fields=['is_active'])
+        return Response({'id': user.id, 'is_active': user.is_active})
+
+
+class AdminDriverSuspendView(views.APIView):
+    """
+    PATCH /admin/drivers/<id>/suspend/
+    Sets is_active=False and deactivates all cars for the driver.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def patch(self, request, id):
+        user = get_object_or_404(User, id=id)
+        if not has_role(user, 'driver'):
+            return Response(
+                {'error': 'User does not have the driver role'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        user.is_active = False
+        user.save(update_fields=['is_active'])
+        Car.objects.filter(driver=user, is_active=True).update(is_active=False)
+        return Response({'id': user.id, 'is_active': user.is_active})
+
+
+class AdminTripListView(generics.ListAPIView):
+    """
+    GET /admin/trips/
+    Query params:
+      ?status=requested|accepted|on_route|completed|cancelled
+      ?date_from=YYYY-MM-DD
+      ?date_to=YYYY-MM-DD
+      ?search=  — filter by customer/driver phone or name
+    """
+    serializer_class = AdminTripListSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    pagination_class = AdminPagination
+
+    def get_queryset(self):
+        qs = Trip.objects.select_related(
+            'customer', 'driver', 'tariff'
+        ).order_by('-created_at')
+
+        status_filter = self.request.query_params.get('status')
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        search = self.request.query_params.get('search')
+
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+        if search:
+            qs = qs.filter(
+                Q(customer__phone__icontains=search) |
+                Q(customer__first_name__icontains=search) |
+                Q(customer__last_name__icontains=search) |
+                Q(driver__phone__icontains=search) |
+                Q(driver__first_name__icontains=search) |
+                Q(driver__last_name__icontains=search)
+            )
+        return qs
+
+
+class AdminTripDetailView(generics.RetrieveAPIView):
+    """
+    GET /admin/trips/<uuid:id>/
+    Full trip detail including payment info.
+    """
+    serializer_class = AdminTripDetailSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    lookup_field = 'id'
+    queryset = Trip.objects.select_related('customer', 'driver', 'tariff', 'car')
+
+
+class AdminForceCancelTripView(views.APIView):
+    """
+    POST /admin/trips/<uuid:id>/cancel/
+    Body: { "reason": "optional reason string" }
+    Force-cancels any non-terminal trip.
+    """
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+
+    def post(self, request, id):
+        trip = get_object_or_404(Trip, id=id)
+        if trip.status in ('completed', 'cancelled'):
+            return Response(
+                {'error': f'Trip is already {trip.status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        trip.status = 'cancelled'
+        trip.cancelled_at = timezone.now()
+        trip.cancelled_by = request.user
+        trip.cancel_reason = request.data.get('reason', 'Cancelled by admin')
+        trip.save(update_fields=['status', 'cancelled_at', 'cancelled_by', 'cancel_reason'])
+        return Response({'status': 'Trip force cancelled', 'trip_id': str(trip.id)})
 
 
 # ======================
@@ -530,6 +805,29 @@ class TariffDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = TariffSerializer
     permission_classes = [IsAuthenticatedAndActive, IsAdmin]
     queryset = Tariff.objects.all()
+    lookup_field = 'id'
+
+
+class AdminTariffListView(generics.ListCreateAPIView):
+    """Admin: list all tariffs (including inactive) and create new ones."""
+    serializer_class = TariffSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    queryset = Tariff.objects.all().order_by('id')
+
+
+class AdminTariffDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Admin: retrieve, update, or toggle active status of a tariff."""
+    serializer_class = TariffSerializer
+    permission_classes = [IsAuthenticatedAndActive, IsAdmin]
+    queryset = Tariff.objects.all()
+    lookup_field = 'id'
+
+    def destroy(self, request, *args, **kwargs):
+        """Soft delete: toggle is_active instead of deleting the record."""
+        tariff = self.get_object()
+        tariff.is_active = not tariff.is_active
+        tariff.save(update_fields=['is_active'])
+        return Response(TariffSerializer(tariff).data)
 
 
 # ======================

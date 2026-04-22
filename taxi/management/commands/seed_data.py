@@ -68,6 +68,19 @@ class Command(BaseCommand):
         for name, manufacturer in brands:
             brand_objects.append(CarBrand.objects.create(name=name, manufacturer=manufacturer))
 
+        self.stdout.write(self.style.SUCCESS("Creating admin user..."))
+        admin_user = User.objects.create_user(
+            phone="+77000000000",
+            password="admin1234",
+            first_name="Admin",
+            last_name="Test",
+            is_verified=True,
+            is_active=True,
+            is_staff=True,
+            is_superuser=True,
+        )
+        UserRole.objects.create(user=admin_user, role=admin_role)
+
         self.stdout.write(self.style.SUCCESS("Creating customers..."))
         customers = []
         for i in range(1, 11):
@@ -167,8 +180,10 @@ class Command(BaseCommand):
             self.stdout.write(f"  Driver {idx+1}: {street_name} ({lat}, {lng})")
 
         self.stdout.write(self.style.SUCCESS("\n=== SEED COMPLETED SUCCESSFULLY ==="))
+        self.stdout.write(f"Admins:    {UserRole.objects.filter(role=admin_role).count()}")
         self.stdout.write(f"Customers: {UserRole.objects.filter(role=customer_role).count()}")
-        self.stdout.write(f"Drivers: {UserRole.objects.filter(role=driver_role).count()}")
+        self.stdout.write(f"Drivers:   {UserRole.objects.filter(role=driver_role).count()}")
         self.stdout.write(self.style.SUCCESS("\nTest accounts created:"))
+        self.stdout.write("  Admin:     +77000000000 (password: admin1234)")
         self.stdout.write("  Customers: +77010000001 to +77010000010 (password: test1234)")
         self.stdout.write("  Drivers:   +77020000001 to +77020000030 (password: test1234)")

@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'leaflet',
     'corsheaders',
     'channels',
+    'drf_spectacular',
     'taxi.apps.TaxiConfig',
 ]
 
@@ -88,6 +89,21 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Taxi Service API',
+    'DESCRIPTION': 'REST API for the taxi service mobile and web application',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    'COMPONENT_SPLIT_REQUEST': True,
+    'SECURITY': [{'BearerAuth': []}],
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+        'displayRequestDuration': True,
+        'filter': True,
+    },
 }
 
 SIMPLE_JWT = {

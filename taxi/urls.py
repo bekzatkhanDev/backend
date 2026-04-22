@@ -72,4 +72,26 @@ urlpatterns = [
     path('trips/<uuid:trip_id>/share-token/', views.CreateTripShareTokenView.as_view(), name='create-trip-share-token'),
     path('trips/<uuid:trip_id>/share-tokens/', views.TripShareTokenListView.as_view(), name='trip-share-token-list'),
     path('trips/share/<uuid:token>/', views.PublicTripDetailView.as_view(), name='public-trip-detail'),
+
+    # === 12. Admin Panel ===
+    path('admin/dashboard/', views.AdminDashboardView.as_view(), name='admin-dashboard'),
+
+    # Users
+    path('admin/users/<int:id>/suspend/', views.AdminUserSuspendView.as_view(), name='admin-user-suspend'),
+
+    # Drivers
+    path('admin/drivers/', views.AdminDriverListView.as_view(), name='admin-driver-list'),
+    path('admin/drivers/<int:id>/', views.AdminDriverDetailView.as_view(), name='admin-driver-detail'),
+    path('admin/drivers/<int:id>/approve/', views.AdminDriverApproveView.as_view(), name='admin-driver-approve'),
+    path('admin/drivers/<int:id>/suspend/', views.AdminDriverSuspendView.as_view(), name='admin-driver-suspend'),
+    path('admin/drivers/<int:id>/reactivate/', views.AdminDriverReactivateView.as_view(), name='admin-driver-reactivate'),
+
+    # Tariffs
+    path('admin/tariffs/', views.AdminTariffListView.as_view(), name='admin-tariff-list'),
+    path('admin/tariffs/<int:id>/', views.AdminTariffDetailView.as_view(), name='admin-tariff-detail'),
+
+    # Trips
+    path('admin/trips/', views.AdminTripListView.as_view(), name='admin-trip-list'),
+    path('admin/trips/<uuid:id>/', views.AdminTripDetailView.as_view(), name='admin-trip-detail'),
+    path('admin/trips/<uuid:id>/cancel/', views.AdminForceCancelTripView.as_view(), name='admin-trip-cancel'),
 ]

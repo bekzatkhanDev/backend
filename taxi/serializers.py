@@ -79,7 +79,7 @@ class AdminUserListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'phone', 'first_name', 'last_name', 'is_active', 'roles')
+        fields = ('id', 'phone', 'first_name', 'last_name', 'is_active', 'created_at', 'roles')
 
     def get_roles(self, obj):
         return [ur.role.code for ur in obj.userrole_set.all()]
@@ -495,7 +495,7 @@ class TripSharePublicSerializer(serializers.ModelSerializer):
     driver = UserProfileSerializer(read_only=True)
     car = CarSerializer(read_only=True)
     tariff = TariffSerializer(read_only=True)
-    
+
     class Meta:
         model = Trip
         fields = (
@@ -503,3 +503,178 @@ class TripSharePublicSerializer(serializers.ModelSerializer):
             'start_lat', 'start_lng', 'end_lat', 'end_lng',
             'distance_km', 'price', 'status', 'created_at'
         )
+
+
+# ======================
+# 10. Admin Panel
+# ======================
+
+class AdminUserDetailSerializer(serializers.ModelSerializer):
+    """Full user detail for admin — includes created_at and trip count."""
+    roles = serializers.SerializerMethodField()
+    trip_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'phone', 'first_name', 'last_name', 'is_active',
+                  'is_verified', 'created_at', 'roles', 'trip_count')
+
+    def get_roles(self, obj):
+        return [ur.role.code for ur in obj.userrole_set.all()]
+
+    def get_trip_count(self, obj):
+        return Trip.objects.filter(customer=obj).count()
+
+
+class AdminDriverListSerializer(serializers.ModelSerializer):
+    """Driver list entry — user info + profile snapshot + online status."""
+    roles = serializers.SerializerMethodField()
+    license_number = serializers.SerializerMethodField()
+    experience_years = serializers.SerializerMethodField()
+    rating_avg = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    car_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'phone', 'first_name', 'last_name', 'is_active',
+                  'is_verified', 'created_at', 'roles', 'license_number',
+                  'experience_years', 'rating_avg', 'is_online', 'car_count')
+
+    def get_roles(self, obj):
+        return [ur.role.code for ur in obj.userrole_set.all()]
+
+    def get_license_number(self, obj):
+        try:
+            return obj.driverprofile.license_number
+        except DriverProfile.DoesNotExist:
+            return None
+
+    def get_experience_years(self, obj):
+        try:
+            return obj.driverprofile.experience_years
+        except DriverProfile.DoesNotExist:
+            return None
+
+    def get_rating_avg(self, obj):
+        try:
+            return str(obj.driverprofile.rating_avg)
+        except DriverProfile.DoesNotExist:
+            return None
+
+    def get_is_online(self, obj):
+        return obj.cars.filter(is_active=True).exists()
+
+    def get_car_count(self, obj):
+        return obj.cars.count()
+
+
+class AdminDriverDetailSerializer(serializers.ModelSerializer):
+    """Full driver detail — user + profile + cars + stats."""
+    roles = serializers.SerializerMethodField()
+    driver_profile = serializers.SerializerMethodField()
+    cars = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    trip_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'phone', 'first_name', 'last_name', 'is_active',
+                  'is_verified', 'created_at', 'roles', 'driver_profile',
+                  'cars', 'is_online', 'trip_count')
+
+    def get_roles(self, obj):
+        return [ur.role.code for ur in obj.userrole_set.all()]
+
+    def get_driver_profile(self, obj):
+        try:
+            p = obj.driverprofile
+            return {
+                'license_number': p.license_number,
+                'experience_years': p.experience_years,
+                'rating_avg': str(p.rating_avg),
+            }
+        except DriverProfile.DoesNotExist:
+            return None
+
+    def get_cars(self, obj):
+        return CarSerializer(
+            obj.cars.select_related('brand', 'car_type').all(), many=True
+        ).data
+
+    def get_is_online(self, obj):
+        return obj.cars.filter(is_active=True).exists()
+
+    def get_trip_count(self, obj):
+        return Trip.objects.filter(driver=obj).count()
+
+
+class AdminTripListSerializer(serializers.ModelSerializer):
+    """Trip list entry with customer and driver name/phone for admin."""
+    customer_name = serializers.SerializerMethodField()
+    customer_phone = serializers.SerializerMethodField()
+    driver_name = serializers.SerializerMethodField()
+    driver_phone = serializers.SerializerMethodField()
+    tariff_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = ('id', 'customer_name', 'customer_phone', 'driver_name',
+                  'driver_phone', 'tariff_code', 'distance_km', 'price',
+                  'status', 'created_at')
+
+    def get_customer_name(self, obj):
+        return f"{obj.customer.first_name} {obj.customer.last_name}".strip()
+
+    def get_customer_phone(self, obj):
+        return obj.customer.phone
+
+    def get_driver_name(self, obj):
+        if obj.driver:
+            return f"{obj.driver.first_name} {obj.driver.last_name}".strip()
+        return None
+
+    def get_driver_phone(self, obj):
+        return obj.driver.phone if obj.driver else None
+
+    def get_tariff_code(self, obj):
+        return obj.tariff.code if obj.tariff else None
+
+
+class AdminTripDetailSerializer(serializers.ModelSerializer):
+    """Full trip detail for admin — includes payment info."""
+    customer = serializers.SerializerMethodField()
+    driver = serializers.SerializerMethodField()
+    tariff = TariffSerializer(read_only=True)
+    payment = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = ('id', 'customer', 'driver', 'tariff', 'start_lat', 'start_lng',
+                  'end_lat', 'end_lng', 'distance_km', 'price', 'status',
+                  'created_at', 'cancelled_at', 'cancel_reason', 'payment')
+
+    def get_customer(self, obj):
+        return {
+            'id': obj.customer.id,
+            'phone': obj.customer.phone,
+            'first_name': obj.customer.first_name,
+            'last_name': obj.customer.last_name,
+        }
+
+    def get_driver(self, obj):
+        if not obj.driver:
+            return None
+        return {
+            'id': obj.driver.id,
+            'phone': obj.driver.phone,
+            'first_name': obj.driver.first_name,
+            'last_name': obj.driver.last_name,
+        }
+
+    def get_payment(self, obj):
+        try:
+            p = obj.payment
+            return {'method': p.method, 'status': p.status, 'amount': str(p.amount)}
+        except Payment.DoesNotExist:
+            return None
