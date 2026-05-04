@@ -265,13 +265,15 @@ class TripDetailSerializer(serializers.ModelSerializer):
     driver = UserProfileSerializer(read_only=True)
     car = CarSerializer(read_only=True)
     tariff = TariffSerializer(read_only=True)
+    review = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
         fields = (
             'id', 'customer', 'driver', 'car', 'tariff',
             'start_lat', 'start_lng', 'end_lat', 'end_lng',
-            'distance_km', 'price', 'status', 'created_at', 'allowed_actions'
+            'distance_km', 'price', 'status', 'created_at', 'allowed_actions',
+            'review',
         )
 
     def get_allowed_actions(self, obj):
@@ -289,6 +291,20 @@ class TripDetailSerializer(serializers.ModelSerializer):
                 actions.extend(['cancel'])
 
         return actions
+
+    def get_review(self, obj):
+        try:
+            r = obj.review
+            return {
+                'id': r.id,
+                'reviewer_id': r.reviewer_id,
+                'reviewed_id': r.reviewed_id,
+                'rating': r.rating,
+                'comment': r.comment,
+                'created_at': r.created_at.isoformat(),
+            }
+        except Review.DoesNotExist:
+            return None
 
 
 class TripStatusUpdateSerializer(serializers.ModelSerializer):
